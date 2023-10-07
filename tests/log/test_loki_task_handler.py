@@ -25,15 +25,15 @@ loki_log_response = {
                 "values": [
                     [
                         "1659729439359237120",
-                        '{"line": "line1\\n", "run_id": "test_run_id", "try_number": 3, "map_index": -1}',
+                        'line1\n',
                     ],
                     [
                         "1659729439359296512",
-                        '{"line": "line2\\n", "run_id": "test_run_id", "try_number": 3, "map_index": -1}',
+                        'line2\n',
                     ],
                     [
                         "1659729439359317504",
-                        '{"line": "line3\\n", "run_id": "test_run_id", "try_number": 3, "map_index": -1}',
+                        'line3\n',
                     ],
                 ],
             }
@@ -45,20 +45,23 @@ loki_log_response = {
 expected_payload = {
     "streams": [
         {
-            "stream": {"dag_id": "loki_test_dag", "task_id": "loki_test_task"},
+            "stream": {"application": "airflow", "dag_id": "loki_test_dag", "task_id": "loki_test_task"},
             "values": [
                 [
                     "1659996770510604032",
-                    '{"line": "testline1", "run_id": "test_run_id", "try_number": 1, "map_index": 2}',
+                    'testline1',
+                    {"run_id": "test_run_id", "try_number": 1, "map_index": 2}
                 ],
                 [
                     "1659996579464455168",
-                    '{"line": "testline2", "run_id": "test_run_id", "try_number": 1, "map_index": 2}',
+                    'testline2',
+                    {"run_id": "test_run_id", "try_number": 1, "map_index": 2}
                 ],
             ],
         }
     ]
 }
+
 
 class TestLokiHandler:
     @pytest.fixture(autouse=True)
@@ -73,7 +76,7 @@ class TestLokiHandler:
             enable_gzip=True,
         )
         self.extras = dict(run_id="test_run_id", try_number=1, map_index=2)
-        self.labels = dict(dag_id="loki_test_dag", task_id="loki_test_task")
+        self.labels = dict(dag_id="loki_test_dag", task_id="loki_test_task", application="airflow")
 
         date = datetime(2016, 1, 1)
         self.dag = DAG("loki_test_dag", start_date=date)
@@ -121,17 +124,12 @@ class TestLokiHandler:
         self.handler.set_context(self.ti)
         assert self.handler.labels == self.labels
         assert self.handler.extras == self.extras
-        assert self.handler.upload_on_close == True
+        assert self.handler.upload_on_close
 
     def test_get_task_query(self):
         query = self.handler._get_task_query(self.ti, try_number=2, metadata=None)
-        expected_query = """ {dag_id="loki_test_dag",task_id="loki_test_task"}
-                    | json try_number="try_number",map_index="map_index",run_id="run_id"
-                    | try_number="2" and
-                      map_index="2" and
-                      run_id="test_run_id"
-                    | __error__!="JSONParserErr"
-                    """
+        expected_query = ('{dag_id="loki_test_dag",task_id="loki_test_task",try_number="2",map_index="2",'
+                          'run_id="test_run_id"}')
         assert str(expected_query).strip() == str(query).strip()
 
     def test_read(self, loki_urls):

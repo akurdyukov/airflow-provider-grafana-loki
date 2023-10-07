@@ -93,8 +93,13 @@ import os
 ```
 
 
+Running tests
+---------------------------------------------------
+1. Run `airflow db migrate` to init database
+2. Use `pytest` to run the tests
+
 ----
 
 <h3> Note: The provider is in active  development stage. All sorts of feedback, and bug reports are welcome. I will try to addresss and resolve all issues to the best of my ability </h3> 
-<h3>Incase of any issue or you need any help, please feel free to open an issue. </h3>
+<h3> In case of any issue or you need any help, please feel free to open an issue. </h3>
 <h3>Your contribution to the projects is highly appreciated and welcome.</h3>

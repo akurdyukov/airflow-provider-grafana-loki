@@ -60,16 +60,14 @@ class LokiTaskHandler(FileTaskHandler, LoggingMixin):
         return LokiHook(loki_conn_id=remote_conn_id)
 
     def get_extras(self, ti, try_number=None) -> Dict[str, Any]:
-
         return dict(
             run_id=getattr(ti, "run_id", ""),
-            try_number=try_number if try_number != None else ti.try_number,
+            try_number=try_number if try_number is not None else ti.try_number,
             map_index=getattr(ti, "map_index", ""),
         )
 
     def get_labels(self, ti) -> Dict[str, str]:
-
-        return {"dag_id": ti.dag_id, "task_id": ti.task_id}
+        return {"dag_id": ti.dag_id, "task_id": ti.task_id, "application": "airflow"}
 
     def set_context(self, task_instance: "TaskInstance") -> None:
 
@@ -93,19 +91,14 @@ class LokiTaskHandler(FileTaskHandler, LoggingMixin):
         run_id = getattr(ti, "run_id", "")
         map_index = getattr(ti, "map_index", "")
 
-        query = """ {{dag_id="{dag_id}",task_id="{task_id}"}}
-                    | json try_number="try_number",map_index="map_index",run_id="run_id"
-                    | try_number="{try_number}" and
-                      map_index="{map_index}" and
-                      run_id="{run_id}"
-                    | __error__!="JSONParserErr"
-                """.format(
-            try_number=try_number,
-            map_index=map_index,
-            run_id=run_id,
-            dag_id=ti.dag_id,
-            task_id=ti.task_id,
-        )
+        query = ('{{dag_id="{dag_id}",task_id="{task_id}",try_number="{try_number}",map_index="{map_index}",'
+                 'run_id="{run_id}"}}'.format(
+                    try_number=try_number,
+                    map_index=map_index,
+                    run_id=run_id,
+                    dag_id=ti.dag_id,
+                    task_id=ti.task_id,
+                ))
 
         return query
 
@@ -116,8 +109,8 @@ class LokiTaskHandler(FileTaskHandler, LoggingMixin):
         query = self._get_task_query(ti, try_number, metadata)
 
         start = ti.start_date - timedelta(days=15)
-        #if the task is running or queued, the task will not have end_date, in that
-        # case, we will use a resonable internal of 5 days
+        # if the task is running or queued, the task will not have end_date, in that
+        # case, we will use a reasonable internal of 5 days
 
         end_date = ti.end_date  or ti.start_date + timedelta(days=5)
 
@@ -140,19 +133,17 @@ class LokiTaskHandler(FileTaskHandler, LoggingMixin):
             for i in data["data"]["result"]:
                 for v in i["values"]:
                     try:
-                        msg = v[1]
-                        line = json.loads(msg)["line"]
+                        line = v[1]
                         lines.append(line)
                     except Exception as e:
                         self.log.exception(e)
                         pass
 
-        if  lines:
+        if lines:
             log_lines = "".join(lines)
             return log_lines, {"end_of_log": True}
         else:
             return super()._read(ti, try_number, metadata)
-
 
     def close(self):
         """Close and upload local log file to remote storage Loki."""
@@ -181,9 +172,7 @@ class LokiTaskHandler(FileTaskHandler, LoggingMixin):
         lines = []
         for line in log:
             ts = str(int(time.time() * ns))
-            line = {**{"line": line}, ** extras }
-            line = json.dumps(line)
-            lines.append([ts, line])
+            lines.append([ts, line, extras])
 
         stream = {
             "stream": labels,
