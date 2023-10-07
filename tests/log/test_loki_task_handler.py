@@ -66,6 +66,25 @@ expected_payload = {
     ]
 }
 
+expected_payload_without_ansi = {
+    "streams": [
+        {
+            "stream": {
+                "application": "airflow",
+                "dag_id": "loki_test_dag",
+                "task_id": "loki_test_task"
+            },
+            "values": [
+                [
+                    "1659996770510604032",
+                    'testline1',
+                    {"run_id": "test_run_id", "try_number": 1, "map_index": 2}
+                ],
+            ],
+        }
+    ]
+}
+
 
 class TestLokiHandler:
     @pytest.fixture(autouse=True)
@@ -195,3 +214,17 @@ class TestLokiHandler:
         }
         payload = gzip.compress(json.dumps(expected_payload).encode("utf-8"))
         self.handler.hook.push_log.assert_called_once_with(payload=payload, headers=headers)
+
+    def test_loki_write_without_ansi(self, mocker):
+        log = ['\x1b[00m\x1b[01;31mtestline1\x1b[00m\x1b[01;31m']
+        self.handler.hook.push_log = mocker.Mock()
+        self.handler.enable_gzip = False
+        self.handler.set_context(self.ti)
+        with patch(
+                "time.time", side_effect=[1659996770.5106041]
+        ):
+            self.handler.loki_write(log)
+
+        headers = {'Content-Type': "application/json"}
+        self.handler.hook.push_log.assert_called_once_with(payload=expected_payload_without_ansi,
+                                                           headers=headers)

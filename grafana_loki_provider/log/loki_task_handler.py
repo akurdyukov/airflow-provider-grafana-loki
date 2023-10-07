@@ -1,10 +1,11 @@
 """Loki logging handler for tasks"""
 import gzip
-import typing
 import logging
+import re
 import time
 import os
 import json
+import typing
 from typing import Optional, Any, Dict, List, Tuple
 from datetime import timedelta
 from airflow.utils.log.file_task_handler import FileTaskHandler
@@ -40,6 +41,7 @@ class LokiTaskHandler(FileTaskHandler, LoggingMixin):
         self.enable_gzip = enable_gzip
         self.labels: Dict[str, str] = {}
         self.extras: Dict[str, Any] = {}
+        self.ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
 
     @cached_property
     def hook(self) -> LokiHook:
@@ -169,7 +171,9 @@ class LokiTaskHandler(FileTaskHandler, LoggingMixin):
         lines = []
         for line in log:
             ts = str(int(time.time() * ns))
-            lines.append([ts, line, extras])
+            # strip ANSI escape sequences
+            stripped = self.ansi_escape.sub('', line)
+            lines.append([ts, stripped, extras])
 
         stream = {
             "stream": labels,
@@ -177,7 +181,7 @@ class LokiTaskHandler(FileTaskHandler, LoggingMixin):
         }
         return {"streams": [stream]}
 
-    def loki_write(self, log):
+    def loki_write(self, log: List[str]):
         payload = self.build_payload(log, self.labels, self.extras)
 
         headers = {"Content-Type": "application/json"}
