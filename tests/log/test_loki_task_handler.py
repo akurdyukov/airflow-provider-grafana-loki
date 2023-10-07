@@ -1,16 +1,17 @@
-from grafana_loki_provider.log.loki_task_handler import LokiTaskHandler
-from grafana_loki_provider.hooks.loki import LokiHook
+import gzip
+import json
 import pytest
+from datetime import timedelta
+import requests_mock
+from unittest.mock import patch
 from airflow.models import DAG, DagRun, TaskInstance
 from airflow.operators.empty import EmptyOperator
 from airflow.utils.session import create_session
 from airflow.utils.state import State
 from airflow.utils.timezone import datetime
-from unittest.mock import patch
-from datetime import timedelta
-import requests_mock
-import gzip
-import json
+from grafana_loki_provider.log.loki_task_handler import LokiTaskHandler
+from grafana_loki_provider.hooks.loki import LokiHook
+
 loki_log_response = {
     "data": {
         "result": [
@@ -41,11 +42,14 @@ loki_log_response = {
     }
 }
 
-
 expected_payload = {
     "streams": [
         {
-            "stream": {"application": "airflow", "dag_id": "loki_test_dag", "task_id": "loki_test_task"},
+            "stream": {
+                "application": "airflow",
+                "dag_id": "loki_test_dag",
+                "task_id": "loki_test_task"
+            },
             "values": [
                 [
                     "1659996770510604032",
@@ -108,7 +112,6 @@ class TestLokiHandler:
             session.query(DagRun).delete()
 
     def test_hook_property(self, mocker):
-
         assert isinstance(self.handler.hook, LokiHook)
 
     def test_get_extras(self):
@@ -120,7 +123,6 @@ class TestLokiHandler:
         assert labels == self.labels
 
     def test_set_context(self, session):
-
         self.handler.set_context(self.ti)
         assert self.handler.labels == self.labels
         assert self.handler.extras == self.extras
@@ -128,12 +130,12 @@ class TestLokiHandler:
 
     def test_get_task_query(self):
         query = self.handler._get_task_query(self.ti, try_number=2, metadata=None)
-        expected_query = ('{dag_id="loki_test_dag",task_id="loki_test_task",try_number="2",map_index="2",'
+        expected_query = ('{dag_id="loki_test_dag",task_id="loki_test_task",'
+                          'try_number="2",map_index="2",'
                           'run_id="test_run_id"}')
         assert str(expected_query).strip() == str(query).strip()
 
     def test_read(self, loki_urls):
-
         self.handler.hook.get_conn()
         query_range_url = loki_urls["query_range_url"]
 
@@ -155,10 +157,9 @@ class TestLokiHandler:
         self.handler.loki_write.assert_called_once_with(["testLogLine1"])
 
     def test_build_payload(self, mocker):
-
         log = ["testline1", "testline2"]
         with patch(
-            "time.time", side_effect=[1659996770.5106041, 1659996579.464455168]
+                "time.time", side_effect=[1659996770.5106041, 1659996579.464455168]
         ):
             payload = self.handler.build_payload(
                 log=log, labels=self.labels, extras=self.extras
@@ -166,19 +167,18 @@ class TestLokiHandler:
         assert payload == expected_payload
 
     def test_loki_write(self, mocker):
-
         log = ["testline1", "testline2"]
         self.handler.hook.push_log = mocker.Mock()
         self.handler.enable_gzip = False
         self.handler.set_context(self.ti)
         with patch(
-            "time.time", side_effect=[1659996770.5106041, 1659996579.464455168]
+                "time.time", side_effect=[1659996770.5106041, 1659996579.464455168]
         ):
             self.handler.loki_write(log)
 
-        headers = {'Content-Type':"application/json"}
-        self.handler.hook.push_log.assert_called_once_with(payload=expected_payload, headers=headers)
-
+        headers = {'Content-Type': "application/json"}
+        self.handler.hook.push_log.assert_called_once_with(payload=expected_payload,
+                                                           headers=headers)
 
     def test_loki_write_with_gzip(self, mocker):
         global expected_payload
@@ -189,7 +189,9 @@ class TestLokiHandler:
         self.handler.build_payload = mocker.Mock(return_value=expected_payload)
         self.handler.loki_write(log)
 
-        headers = {'Content-Type':"application/json"}
-        headers['Content-Encoding']='gzip'
+        headers = {
+            'Content-Type': "application/json",
+            'Content-Encoding': 'gzip'
+        }
         payload = gzip.compress(json.dumps(expected_payload).encode("utf-8"))
         self.handler.hook.push_log.assert_called_once_with(payload=payload, headers=headers)

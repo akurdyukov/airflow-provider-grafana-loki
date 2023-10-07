@@ -9,7 +9,7 @@ from urllib.parse import urlparse, urlencode
 
 def test_default_conn(loki_conn_details):
     hook = LokiHook()
-    conn = hook.get_conn()
+    hook.get_conn()
     assert hook.conn_type == loki_conn_details["conn_type"]
     assert hook.base_url == loki_conn_details["host"]
 
@@ -43,7 +43,7 @@ def test_push_log(loki_urls):
     print(os.environ["AIRFLOW_CONN_LOKI_DEFAULT"])
     with requests_mock.Mocker() as m:
         m.post(push_log_url)
-        response = hook.push_log(payload=payload)
+        hook.push_log(payload=payload)
         r_url = m.last_request.url
         r: ParseResult = urlparse(r_url)
         assert r.scheme + "://" + str(r.hostname) + r.path == push_log_url

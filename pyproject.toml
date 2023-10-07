@@ -29,6 +29,7 @@ test = [
     "pytest-mock",
     "pytest>=7.0.0",
     "requests-mock",
+    "flake8"
 ]
 
 [project.entry-points.apache_airflow_provider]
