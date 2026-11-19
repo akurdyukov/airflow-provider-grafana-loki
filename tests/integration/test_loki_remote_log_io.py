@@ -1,0 +1,82 @@
+"""LokiRemoteLogIO against a real Loki: upload a JSON-lines task log, read it back.
+
+This is the Airflow 3 REMOTE_TASK_LOG path; the IO class itself runs on Airflow 2 and 3.
+Run with LOKI_URL set, e.g.:
+    LOKI_URL=http://localhost:3100 pytest tests/integration
+"""
+import json
+import os
+import time
+import uuid
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+
+import pytest
+
+from grafana_loki_provider.log.loki_task_handler import LokiRemoteLogIO
+
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.skipif(not os.environ.get("LOKI_URL"), reason="LOKI_URL not set"),
+]
+
+
+@pytest.fixture
+def ti():
+    now = datetime.now(timezone.utc)
+    return SimpleNamespace(
+        # Unique dag_id per test so streams from other tests/runs never match.
+        dag_id=f"loki_io_it_{uuid.uuid4().hex[:10]}",
+        task_id="it_task",
+        run_id="it_run",
+        try_number=1,
+        map_index=-1,
+        start_date=now - timedelta(minutes=1),
+        end_date=now,
+    )
+
+
+def write_json_log(path, events):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    base = datetime.now(timezone.utc)
+    with open(path, "w") as f:
+        for i, event in enumerate(events):
+            ts = (base + timedelta(milliseconds=i)).isoformat().replace("+00:00", "Z")
+            f.write(json.dumps({"timestamp": ts, "event": event, "level": "info"}) + "\n")
+
+
+def wait_for_events(io, ti, expected_count, timeout=20.0):
+    deadline = time.monotonic() + timeout
+    events = []
+    while time.monotonic() < deadline:
+        messages, logs = io.read("unused", ti)
+        events = [json.loads(line)["event"] for line in (logs or [""])[0].splitlines()]
+        if len(events) >= expected_count:
+            return events
+        time.sleep(0.5)
+    pytest.fail(f"Loki returned {len(events)}/{expected_count} lines; last messages: {messages}")
+
+
+@pytest.mark.parametrize("enable_gzip", [True, False], ids=["gzip", "plain"])
+def test_upload_and_read_back(tmp_path, ti, enable_gzip):
+    io = LokiRemoteLogIO(base_log_folder=tmp_path, enable_gzip=enable_gzip, delete_local_copy=True)
+    rel = f"dag_id={ti.dag_id}/attempt=1.log"
+    write_json_log(tmp_path / rel, ["first", "second", "third"])
+
+    io.upload(rel, ti)
+
+    assert not (tmp_path / rel).exists()
+    assert wait_for_events(io, ti, 3) == ["first", "second", "third"]
+
+
+def test_read_isolates_tries(tmp_path, ti):
+    io = LokiRemoteLogIO(base_log_folder=tmp_path)
+    write_json_log(tmp_path / "attempt=1.log", ["from try 1"])
+    io.upload("attempt=1.log", ti)
+    ti.try_number = 2
+    write_json_log(tmp_path / "attempt=2.log", ["from try 2"])
+    io.upload("attempt=2.log", ti)
+
+    assert wait_for_events(io, ti, 1) == ["from try 2"]
+    ti.try_number = 1
+    assert wait_for_events(io, ti, 1) == ["from try 1"]

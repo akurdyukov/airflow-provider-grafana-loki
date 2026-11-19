@@ -1,6 +1,17 @@
 import pytest
 from airflow import settings
 
+from grafana_loki_provider.version_compat import AIRFLOW_V_3_0_PLUS
+
+# These exercise the Airflow 2 upload-on-close path with real DAG/DagRun/TaskInstance objects,
+# built with Airflow 2-only APIs. On Airflow 3, LokiRemoteLogIO is covered by the *_remote_log_io
+# modules, which run on both versions.
+collect_ignore = (
+    ["log/test_loki_task_handler.py", "integration/test_loki_roundtrip.py"]
+    if AIRFLOW_V_3_0_PLUS
+    else []
+)
+
 
 @pytest.fixture(autouse=True, scope="module")
 def session():

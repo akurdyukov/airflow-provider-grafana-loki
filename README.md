@@ -35,13 +35,13 @@ Note: `pip install airflow-provider-grafana-loki` from PyPI installs the older 0
 
 Requirements:
 
-- Airflow 2.x (tested with 2.11.2 on Python 3.11 and 3.12; Airflow 3 is not supported yet)
+- Airflow 2.x or 3.x (tested with 2.11.2 and 3.4.0 on Python 3.11 and 3.12). Airflow 3 needs version 0.1.0 or later; its setup differs, see [Airflow 3](#airflow-3) below.
 - Loki 3.x, or Loki 2.9+ with structured metadata enabled. `run_id`, `try_number` and `map_index` are stored as structured metadata.
 
 Logs pushed by versions before 0.0.3 can't be read back from Loki. For those runs, Airflow shows the local log file instead.
 
-Configuration Airflow to write logs to Grafana Loki
----------------------------------------------------
+Configuration Airflow to write logs to Grafana Loki (Airflow 2)
+---------------------------------------------------------------
 
 Airflow can be configured to read and write task logs in Grafana Loki. It uses an existing
 Airflow connection to read or write logs. If you don't have a connection properly setup,
@@ -94,6 +94,44 @@ Follow the steps below to enable Grafana Loki logging:
 
 7. Restart the Airflow webserver and scheduler, and trigger (or wait for) a new task execution.
 8. Verify that logs are showing up for newly executed tasks is showing up in Airflow UI. 
+
+Airflow 3
+---------------------------------------------------
+
+In Airflow 3 the task supervisor uploads logs after each task finishes, and the API server reads them back. Both go through a `REMOTE_TASK_LOG` object defined in the logging config module, not through the task handler. The provider supplies `LokiRemoteLogIO` for this. The stock `FileTaskHandler` stays as the task handler.
+
+1. Create ``$AIRFLOW_HOME/config/log_config.py`` (plus an empty ``__init__.py``) on the `PYTHONPATH`, as in steps 1-2 above.
+2. Copy the contents of Airflow 3's ``airflow/config_templates/airflow_local_settings.py`` into it.
+3. Add a `loki` branch before the final `else: raise AirflowException(...)`:
+
+```python
+    elif remote_base_log_folder.startswith("loki"):
+        from grafana_loki_provider.log.loki_task_handler import LokiRemoteLogIO
+
+        _default_conn_name_from("grafana_loki_provider.hooks.loki", "LokiHook")
+        REMOTE_TASK_LOG = LokiRemoteLogIO(
+            base_log_folder=BASE_LOG_FOLDER,
+            delete_local_copy=delete_local_copy,
+            **_io_kwargs,
+        )
+```
+
+4. Update ``airflow.cfg``:
+
+```
+[logging]
+remote_logging = True
+remote_base_log_folder = loki
+logging_config_class = log_config.DEFAULT_LOGGING_CONFIG
+remote_log_conn_id = <name of the Grafana Loki connection>
+```
+
+`remote_log_conn_id` is optional; without it the `loki_default` connection is used. Extra `LokiRemoteLogIO` options can go in `remote_task_handler_kwargs`, for example `{"enable_gzip": false}`. `delete_local_logs = True` removes the local file after a successful upload.
+
+Notes:
+
+- Logs are uploaded when the task finishes. While a task runs, the UI shows its logs from the worker, as with other remote log backends.
+- Each JSON log line is stored as-is with its own timestamp, so Airflow parses lines read back from Loki the same way as local log lines.
 
 
 in case you are using gevent worker class, you might face `RecursionError: maximum recursion depth exceeded` error while reading logs from Loki. 
