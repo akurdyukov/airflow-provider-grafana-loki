@@ -80,3 +80,33 @@ def test_read_isolates_tries(tmp_path, ti):
     assert wait_for_events(io, ti, 1) == ["from try 2"]
     ti.try_number = 1
     assert wait_for_events(io, ti, 1) == ["from try 1"]
+
+
+def test_streams_while_running_without_duplicates(tmp_path, ti):
+    io = LokiRemoteLogIO(base_log_folder=tmp_path, stream_logs=True, stream_interval=0.2)
+    rel = f"dag_id={ti.dag_id}/run_id={ti.run_id}/task_id={ti.task_id}/attempt=1.log"
+    path = tmp_path / rel
+    path.parent.mkdir(parents=True)
+    path.touch()
+
+    def append(events):
+        base = datetime.now(timezone.utc)
+        with open(path, "a") as f:
+            for i, event in enumerate(events):
+                ts = (base + timedelta(milliseconds=i)).isoformat().replace("+00:00", "Z")
+                f.write(json.dumps({"timestamp": ts, "event": event}) + "\n")
+
+    with open(path, "ab") as fh:
+        # What the supervisor's file logger does on the task's first log record.
+        io._stream_processor(SimpleNamespace(_file=fh), "info", {})
+        append(["running 1", "running 2"])
+
+        # Visible in Loki while the task is still running (before upload()).
+        assert wait_for_events(io, ti, 2) == ["running 1", "running 2"]
+
+        append(["finishing"])
+        io.upload(rel, ti)
+
+    assert wait_for_events(io, ti, 3) == ["running 1", "running 2", "finishing"]
+    time.sleep(1)  # give any stray duplicate push time to land
+    assert wait_for_events(io, ti, 3) == ["running 1", "running 2", "finishing"]

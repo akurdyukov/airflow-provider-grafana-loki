@@ -26,6 +26,21 @@ class LokiHook(HttpHook):
                  *args, **kwargs) -> None:
         super().__init__(http_conn_id=loki_conn_id, *args, **kwargs)
         self.loki_conn_id = loki_conn_id
+        self._cached_connection = None
+
+    def cache_connection(self) -> None:
+        """Fetch the connection now and reuse it for all later requests.
+
+        Airflow 3's task supervisor only exposes the remote-logging connection while it sets up
+        logging, so a hook used later from a background thread must capture it up front.
+        """
+        self._cached_connection = super().get_connection(self.loki_conn_id)
+
+    def get_connection(self, conn_id):  # type: ignore[override]
+        cached = getattr(self, "_cached_connection", None)  # may run before __init__ finishes
+        if cached is not None and conn_id == self.loki_conn_id:
+            return cached
+        return super().get_connection(conn_id)
 
     def query_range(self, params, headers=None) -> Dict:
         query_range_endpoint = self.v1_base_endpoint.format(method="query_range")

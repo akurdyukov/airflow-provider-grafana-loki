@@ -128,10 +128,23 @@ remote_log_conn_id = <name of the Grafana Loki connection>
 
 `remote_log_conn_id` is optional; without it the `loki_default` connection is used. Extra `LokiRemoteLogIO` options can go in `remote_task_handler_kwargs`, for example `{"enable_gzip": false}`. `delete_local_logs = True` removes the local file after a successful upload.
 
+### Streaming logs while the task runs
+
+By default logs are uploaded when the task finishes; while a task runs, the UI shows its logs from the worker. To send lines to Loki as they're written, set:
+
+```
+[logging]
+remote_task_handler_kwargs = {"stream_logs": true}
+```
+
+The task supervisor then pushes new log lines every `stream_interval` seconds (default 2). When the task finishes, only the lines not yet sent are uploaded, so nothing is duplicated. If Loki is unreachable for a while, the unsent lines are retried on the next push or at task end.
+
+Streaming identifies the task from the log file path, so it needs Airflow's default `log_filename_template` (`dag_id=…/run_id=…/task_id=…/attempt=N.log`). Logs with other paths are uploaded when the task finishes, as without streaming.
+
 Notes:
 
-- Logs are uploaded when the task finishes. While a task runs, the UI shows its logs from the worker, as with other remote log backends.
 - Each JSON log line is stored as-is with its own timestamp, so Airflow parses lines read back from Loki the same way as local log lines.
+- Large logs are pushed in batches of up to 1000 lines or 1 MiB, under Loki's default request size limit.
 
 
 in case you are using gevent worker class, you might face `RecursionError: maximum recursion depth exceeded` error while reading logs from Loki. 
