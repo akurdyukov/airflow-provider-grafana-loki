@@ -17,16 +17,16 @@ This package provides Hook and LogHandler that integrates with Grafana Loki. Lok
 
 Installation
 --------------
-Install version 0.1.0 from the GitHub release using `pip`:
+Install version 0.2.0 from the GitHub release using `pip`:
 
 ```
-pip install https://github.com/akurdyukov/airflow-provider-grafana-loki/releases/download/v0.1.0/airflow_provider_grafana_loki-0.1.0-py3-none-any.whl
+pip install https://github.com/akurdyukov/airflow-provider-grafana-loki/releases/download/v0.2.0/airflow_provider_grafana_loki-0.2.0-py3-none-any.whl
 ```
 
 Or install the tag straight from git:
 
 ```
-pip install "git+https://github.com/akurdyukov/airflow-provider-grafana-loki.git@v0.1.0"
+pip install "git+https://github.com/akurdyukov/airflow-provider-grafana-loki.git@v0.2.0"
 ```
 
 `apache-airflow-providers-http` is installed automatically as a dependency.
@@ -130,7 +130,7 @@ remote_log_conn_id = <name of the Grafana Loki connection>
 
 ### Streaming logs while the task runs
 
-By default logs are uploaded when the task finishes; while a task runs, the UI shows its logs from the worker. To send lines to Loki as they're written, set:
+By default logs are uploaded when the task finishes; while a task runs, the UI shows its logs from the worker. To send lines to Loki as they're written (version 0.2.0 or later), set:
 
 ```
 [logging]
