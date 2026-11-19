@@ -17,9 +17,28 @@ This package provides Hook and LogHandler that integrates with Grafana Loki. Lok
 
 Installation
 --------------
-Install using `pip` 
+Install version 0.0.3 from the GitHub release using `pip`:
 
-`pip install airflow-provider-grafana-loki` 
+```
+pip install https://github.com/akurdyukov/airflow-provider-grafana-loki/releases/download/v0.0.3/airflow_provider_grafana_loki-0.0.3-py3-none-any.whl
+```
+
+Or install the tag straight from git:
+
+```
+pip install "git+https://github.com/akurdyukov/airflow-provider-grafana-loki.git@v0.0.3"
+```
+
+`apache-airflow-providers-http` is installed automatically as a dependency.
+
+Note: `pip install airflow-provider-grafana-loki` from PyPI installs the older 0.0.2, which doesn't include the fixes in 0.0.3.
+
+Requirements:
+
+- Airflow 2.x (tested with 2.11.2 on Python 3.11 and 3.12; Airflow 3 is not supported yet)
+- Loki 3.x, or Loki 2.9+ with structured metadata enabled. `run_id`, `try_number` and `map_index` are stored as structured metadata.
+
+Logs pushed by versions before 0.0.3 can't be read back from Loki. For those runs, Airflow shows the local log file instead.
 
 Configuration Airflow to write logs to Grafana Loki
 ---------------------------------------------------
