@@ -89,9 +89,13 @@ class LokiTaskHandler(FileTaskHandler, LoggingMixin):
         run_id = getattr(ti, "run_id", "")
         map_index = getattr(ti, "map_index", "")
 
-        query = ('{{dag_id="{dag_id}",task_id="{task_id}",'
-                 'try_number="{try_number}",'
-                 'map_index="{map_index}",run_id="{run_id}"}}'.format(
+        # dag_id/task_id are stream labels and go in the stream selector.
+        # run_id/try_number/map_index are pushed as structured metadata
+        # (see build_payload), which Loki only matches via label filters.
+        query = ('{{dag_id="{dag_id}",task_id="{task_id}"}}'
+                 ' | try_number="{try_number}"'
+                 ' | map_index="{map_index}"'
+                 ' | run_id="{run_id}"'.format(
                     try_number=try_number,
                     map_index=map_index,
                     run_id=run_id,

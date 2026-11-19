@@ -126,6 +126,11 @@ class TestLokiHandler:
 
         yield
 
+        # Close without uploading; otherwise logging.shutdown() closes the
+        # handler at interpreter exit and attempts a real push to Loki.
+        self.handler.upload_on_close = False
+        self.handler.close()
+
         self.dag.clear()
         with create_session() as session:
             session.query(DagRun).delete()
@@ -149,9 +154,9 @@ class TestLokiHandler:
 
     def test_get_task_query(self):
         query = self.handler._get_task_query(self.ti, try_number=2, metadata=None)
-        expected_query = ('{dag_id="loki_test_dag",task_id="loki_test_task",'
-                          'try_number="2",map_index="2",'
-                          'run_id="test_run_id"}')
+        expected_query = ('{dag_id="loki_test_dag",task_id="loki_test_task"}'
+                          ' | try_number="2" | map_index="2"'
+                          ' | run_id="test_run_id"')
         assert str(expected_query).strip() == str(query).strip()
 
     def test_read(self, loki_urls):
@@ -200,7 +205,6 @@ class TestLokiHandler:
                                                            headers=headers)
 
     def test_loki_write_with_gzip(self, mocker):
-        global expected_payload
         log = ["testline1", "testline2"]
         self.handler.hook.push_log = mocker.Mock()
         self.handler.enable_gzip = True
