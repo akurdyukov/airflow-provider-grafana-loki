@@ -54,12 +54,12 @@ expected_payload = {
                 [
                     "1659996770510604032",
                     'testline1',
-                    {"run_id": "test_run_id", "try_number": 1, "map_index": 2}
+                    {"run_id": "test_run_id", "try_number": "1", "map_index": "2"}
                 ],
                 [
                     "1659996579464455168",
                     'testline2',
-                    {"run_id": "test_run_id", "try_number": 1, "map_index": 2}
+                    {"run_id": "test_run_id", "try_number": "1", "map_index": "2"}
                 ],
             ],
         }
@@ -78,7 +78,7 @@ expected_payload_without_ansi = {
                 [
                     "1659996770510604032",
                     'testline1',
-                    {"run_id": "test_run_id", "try_number": 1, "map_index": 2}
+                    {"run_id": "test_run_id", "try_number": "1", "map_index": "2"}
                 ],
             ],
         }
@@ -98,7 +98,7 @@ class TestLokiHandler:
             name="test_handler",
             enable_gzip=True,
         )
-        self.extras = dict(run_id="test_run_id", try_number=1, map_index=2)
+        self.extras = dict(run_id="test_run_id", try_number="1", map_index="2")
         self.labels = dict(dag_id="loki_test_dag", task_id="loki_test_task", application="airflow")
 
         date = datetime(2016, 1, 1)
@@ -126,6 +126,11 @@ class TestLokiHandler:
 
         yield
 
+        # Close without uploading; otherwise logging.shutdown() closes the
+        # handler at interpreter exit and attempts a real push to Loki.
+        self.handler.upload_on_close = False
+        self.handler.close()
+
         self.dag.clear()
         with create_session() as session:
             session.query(DagRun).delete()
@@ -149,9 +154,9 @@ class TestLokiHandler:
 
     def test_get_task_query(self):
         query = self.handler._get_task_query(self.ti, try_number=2, metadata=None)
-        expected_query = ('{dag_id="loki_test_dag",task_id="loki_test_task",'
-                          'try_number="2",map_index="2",'
-                          'run_id="test_run_id"}')
+        expected_query = ('{dag_id="loki_test_dag",task_id="loki_test_task"}'
+                          ' | try_number="2" | map_index="2"'
+                          ' | run_id="test_run_id"')
         assert str(expected_query).strip() == str(query).strip()
 
     def test_read(self, loki_urls):
@@ -195,12 +200,12 @@ class TestLokiHandler:
         ):
             self.handler.loki_write(log)
 
-        headers = {'Content-Type': "application/json"}
-        self.handler.hook.push_log.assert_called_once_with(payload=expected_payload,
-                                                           headers=headers)
+        self.handler.hook.push_log.assert_called_once()
+        kwargs = self.handler.hook.push_log.call_args.kwargs
+        assert kwargs["headers"] == {'Content-Type': "application/json"}
+        assert json.loads(kwargs["payload"]) == expected_payload
 
     def test_loki_write_with_gzip(self, mocker):
-        global expected_payload
         log = ["testline1", "testline2"]
         self.handler.hook.push_log = mocker.Mock()
         self.handler.enable_gzip = True
@@ -225,6 +230,7 @@ class TestLokiHandler:
         ):
             self.handler.loki_write(log)
 
-        headers = {'Content-Type': "application/json"}
-        self.handler.hook.push_log.assert_called_once_with(payload=expected_payload_without_ansi,
-                                                           headers=headers)
+        self.handler.hook.push_log.assert_called_once()
+        kwargs = self.handler.hook.push_log.call_args.kwargs
+        assert kwargs["headers"] == {'Content-Type': "application/json"}
+        assert json.loads(kwargs["payload"]) == expected_payload_without_ansi
