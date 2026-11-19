@@ -14,5 +14,5 @@ def get_provider_info():
                 "connection-type": "grafana_loki"
             }
         ],
-        "versions": ["0.0.3"]  # Required
+        "versions": ["0.1.0"]  # Required
     }
