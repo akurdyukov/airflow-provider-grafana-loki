@@ -6,7 +6,7 @@ with open("README.md", "r") as fh:
 """Perform the package airflow-provider-grafana-loki setup."""
 setup(
     name="airflow-provider-grafana-loki",
-    version="0.0.1",
+    version="0.0.3",
     description="A provider package for pushing and reading airflow task log from Grafana Loki.",
     long_description=long_description,
     long_description_content_type="text/markdown",
@@ -21,7 +21,7 @@ setup(
         "grafana_loki_provider.hooks",
         "grafana_loki_provider.log",
     ],
-    install_requires=["apache-airflow>=2.0"],
+    install_requires=["apache-airflow>=2.0", "apache-airflow-providers-http"],
     extras_require={"test": ["pytest>=7.0.0", "requests-mock", "pytest-mock"]},
     setup_requires=["setuptools", "wheel"],
     author="Snjypl",
