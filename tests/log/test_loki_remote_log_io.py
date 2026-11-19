@@ -12,6 +12,7 @@ from grafana_loki_provider.log.loki_task_handler import (
     LokiRemoteLogIO,
     LokiTaskHandler,
     _parse_timestamp_ns,
+    to_entries,
 )
 from grafana_loki_provider.version_compat import AIRFLOW_V_3_0_PLUS
 
@@ -84,6 +85,36 @@ def test_upload_pushes_lines_with_their_own_timestamps(io, tmp_path, loki_urls):
         # No timestamp of its own: inherits the previous line's.
         [str(ns(t2)), "plain continuation", METADATA],
     ]
+
+
+def test_leading_untimed_lines_take_first_timestamp():
+    t1 = START + timedelta(seconds=1)
+    entries, last = to_entries(["plain first", json_line(t1, "timed"), "plain after"])
+    assert entries == [
+        (ns(t1), "plain first"),
+        (ns(t1), json_line(t1, "timed")),
+        (ns(t1), "plain after"),
+    ]
+    assert last == ns(t1)
+    assert to_entries([]) == ([], None)
+
+
+def test_reupload_after_append_repeats_identical_entries(io, tmp_path, loki_urls):
+    """A task that defers and resumes appends to its log file and the whole file is uploaded
+    again. Entries must be byte-identical across uploads so Loki deduplicates them."""
+    t1, t2 = START + timedelta(seconds=1), START + timedelta(seconds=2)
+    path = write_log(tmp_path, "a.log", ["untimed preamble", json_line(t1, "before deferral")])
+
+    with requests_mock.Mocker() as m:
+        m.post(loki_urls["push_log_url"], status_code=204)
+        io.upload("a.log", make_ti())
+        with open(path, "a") as f:
+            f.write(json_line(t2, "after resume") + "\n")
+        io.upload("a.log", make_ti())
+
+    first, second = (json.loads(r.body)["streams"][0]["values"] for r in m.request_history)
+    assert second[: len(first)] == first
+    assert [v[1] for v in second[len(first):]] == [json_line(t2, "after resume")]
 
 
 def test_upload_gzip_and_absolute_path(tmp_path, loki_urls):

@@ -150,15 +150,21 @@ def to_entries(
 ) -> Tuple[List[LogEntry], Optional[int]]:
     """Timestamp lines; ones without their own timestamp inherit the previous line's.
 
+    Timestamps are derived from the file content only, so re-uploading the same lines (e.g. a
+    task that defers and resumes appends to its log file, and the whole file is uploaded again)
+    produces identical entries, which Loki deduplicates. Leading lines without a timestamp take
+    the first one found later; the current time is used only if no line has one.
+
     Returns the entries and the last timestamp, so a caller can continue across chunks.
     """
+    lines = [line for line in lines if line]
+    stamps = [_parse_timestamp_ns(line) for line in lines]
+    if last_ts is None and lines:
+        last_ts = next((ts for ts in stamps if ts), None) or time.time_ns()
     entries: List[LogEntry] = []
-    for line in lines:
-        if not line:
-            continue
-        ts = _parse_timestamp_ns(line) or last_ts or time.time_ns()
-        entries.append((ts, line))
-        last_ts = ts
+    for line, ts in zip(lines, stamps):
+        last_ts = ts or last_ts
+        entries.append((last_ts, line))
     return entries, last_ts
 
 

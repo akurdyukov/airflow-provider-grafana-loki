@@ -110,3 +110,43 @@ def test_streams_while_running_without_duplicates(tmp_path, ti):
     assert wait_for_events(io, ti, 3) == ["running 1", "running 2", "finishing"]
     time.sleep(1)  # give any stray duplicate push time to land
     assert wait_for_events(io, ti, 3) == ["running 1", "running 2", "finishing"]
+
+
+def test_reupload_after_deferral_is_deduplicated(tmp_path, ti):
+    """A deferred task resumes, appends to its log file, and the whole file is uploaded again.
+    Entries are identical across uploads, so Loki deduplicates them, even after the first
+    upload was flushed from the ingester to storage (a long deferral)."""
+    import requests
+
+    io = LokiRemoteLogIO(base_log_folder=tmp_path)
+    path = tmp_path / "attempt=1.log"
+    path.write_text("untimed preamble\n")
+    write_json_log_append = [
+        json.dumps({"timestamp": ts, "event": event})
+        for ts, event in [
+            ((ti.start_date + timedelta(seconds=1)).isoformat(), "before deferral"),
+            ((ti.start_date + timedelta(seconds=2)).isoformat(), "after resume"),
+        ]
+    ]
+    with open(path, "a") as f:
+        f.write(write_json_log_append[0] + "\n")
+    io.upload("attempt=1.log", ti)
+
+    requests.post(f"{os.environ['LOKI_URL']}/flush", timeout=10).raise_for_status()
+
+    with open(path, "a") as f:
+        f.write(write_json_log_append[1] + "\n")
+    io.upload("attempt=1.log", ti)
+
+    deadline = time.monotonic() + 20
+    lines = []
+    while time.monotonic() < deadline:
+        _, logs = io.read("unused", ti)
+        lines = (logs or [""])[0].splitlines()
+        if len(lines) >= 3:
+            break
+        time.sleep(0.5)
+    time.sleep(1)
+    _, logs = io.read("unused", ti)
+    lines = (logs or [""])[0].splitlines()
+    assert lines == ["untimed preamble", *write_json_log_append]
