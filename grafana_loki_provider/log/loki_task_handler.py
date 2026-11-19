@@ -6,7 +6,7 @@ import time
 import os
 import json
 import typing
-from typing import Optional, Any, Dict, List, Tuple
+from typing import Optional, Dict, List, Tuple
 from datetime import timedelta
 from airflow.utils.log.file_task_handler import FileTaskHandler
 from airflow.utils.log.logging_mixin import LoggingMixin
@@ -40,7 +40,7 @@ class LokiTaskHandler(FileTaskHandler, LoggingMixin):
         self.upload_on_close = True
         self.enable_gzip = enable_gzip
         self.labels: Dict[str, str] = {}
-        self.extras: Dict[str, Any] = {}
+        self.extras: Dict[str, str] = {}
         self.ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
 
     @cached_property
@@ -53,11 +53,12 @@ class LokiTaskHandler(FileTaskHandler, LoggingMixin):
 
         return LokiHook(loki_conn_id=remote_conn_id)
 
-    def get_extras(self, ti, try_number=None) -> Dict[str, Any]:
+    def get_extras(self, ti, try_number=None) -> Dict[str, str]:
+        # Sent as Loki structured metadata, which only accepts string values.
         return dict(
-            run_id=getattr(ti, "run_id", ""),
-            try_number=try_number if try_number is not None else ti.try_number,
-            map_index=getattr(ti, "map_index", ""),
+            run_id=str(getattr(ti, "run_id", "")),
+            try_number=str(try_number if try_number is not None else ti.try_number),
+            map_index=str(getattr(ti, "map_index", "")),
         )
 
     def get_labels(self, ti) -> Dict[str, str]:
@@ -186,11 +187,11 @@ class LokiTaskHandler(FileTaskHandler, LoggingMixin):
         return {"streams": [stream]}
 
     def loki_write(self, log: List[str]):
-        payload = self.build_payload(log, self.labels, self.extras)
+        body = json.dumps(self.build_payload(log, self.labels, self.extras)).encode("utf-8")
 
         headers = {"Content-Type": "application/json"}
         if self.enable_gzip:
-            payload = gzip.compress(json.dumps(payload).encode("utf-8"))
+            body = gzip.compress(body)
             headers["Content-Encoding"] = "gzip"
 
-        self.hook.push_log(payload=payload, headers=headers)
+        self.hook.push_log(payload=body, headers=headers)
