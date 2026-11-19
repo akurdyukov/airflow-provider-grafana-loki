@@ -102,7 +102,7 @@ class TestLokiHandler:
         self.labels = dict(dag_id="loki_test_dag", task_id="loki_test_task", application="airflow")
 
         date = datetime(2016, 1, 1)
-        self.dag = DAG("loki_test_dag", start_date=date)
+        self.dag = DAG("loki_test_dag", start_date=date, schedule=None)
         task = EmptyOperator(task_id="loki_test_task", dag=self.dag)
         dag_run = DagRun(
             dag_id=self.dag.dag_id,
