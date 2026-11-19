@@ -6,7 +6,7 @@ with open("README.md", "r") as fh:
 """Perform the package airflow-provider-grafana-loki setup."""
 setup(
     name="airflow-provider-grafana-loki",
-    version="0.0.3",
+    version="0.1.0",
     description="A provider package for pushing and reading airflow task log from Grafana Loki.",
     long_description=long_description,
     long_description_content_type="text/markdown",
