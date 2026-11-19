@@ -24,11 +24,9 @@ LOKI_URL=http://localhost:3100 pytest tests/integration
 flake8 grafana_loki_provider tests   # lint (max-line-length 100, configured in tox.ini)
 ```
 
-Requires `apache-airflow-providers-http` at runtime (`LokiHook` subclasses `HttpHook`), though it is not declared in dependencies.
-
 ## Architecture
 
-- **Provider registration**: `grafana_loki_provider/__init__.py:get_provider_info` is exposed via the `apache_airflow_provider` entry point. It registers the logging handler and the `grafana_loki` connection type. **The package version lives here** (`"versions": [...]`) — hatch reads it via regex in `pyproject.toml`. `setup.py` is legacy and has a stale version; `pyproject.toml` (hatchling) is the real build config.
+- **Provider registration**: `grafana_loki_provider/__init__.py:get_provider_info` is exposed via the `apache_airflow_provider` entry point. It registers the logging handler and the `grafana_loki` connection type. **The package version lives here** (`"versions": [...]`) — hatch reads it via regex in `pyproject.toml`. `pyproject.toml` (hatchling) is the real build config; `setup.py` is legacy — keep its `version` and `install_requires` in sync when releasing.
 - **`LokiHook`** (`hooks/loki.py`): thin `HttpHook` wrapper; `query_range` (GET) and `push_log` (POST, 3s timeout) against `/loki/api/v1/{method}`. Mutates `self.method` per call.
 - **`LokiTaskHandler`** (`log/loki_task_handler.py`): extends Airflow's `FileTaskHandler`. Writes locally as normal; on `close()` reads the whole local log file and pushes it to Loki in one request (gzip-compressed JSON by default). Skips upload when `ti.raw` is true.
   - Stream **labels** (indexed): `dag_id`, `task_id`, `application="airflow"` — from `get_labels`.
