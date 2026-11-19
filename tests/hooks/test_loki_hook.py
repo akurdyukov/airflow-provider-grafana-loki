@@ -48,3 +48,16 @@ def test_push_log(loki_urls):
         r: ParseResult = urlparse(r_url)
         assert r.scheme + "://" + str(r.hostname) + r.path == push_log_url
         assert m.last_request.method == "POST"
+
+
+def test_cached_connection_survives_env_removal(loki_urls, monkeypatch):
+    """Airflow 3's supervisor removes the conn env var after logging setup; streaming needs it."""
+    hook = LokiHook()
+    hook.cache_connection()
+    monkeypatch.delenv("AIRFLOW_CONN_LOKI_DEFAULT")
+
+    with requests_mock.Mocker() as m:
+        m.post(loki_urls["push_log_url"])
+        hook.push_log(payload=b"{}")
+
+    assert m.last_request.url == loki_urls["push_log_url"]

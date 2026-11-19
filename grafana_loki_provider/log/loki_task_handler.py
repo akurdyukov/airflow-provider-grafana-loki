@@ -14,10 +14,12 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from functools import cached_property
 from pathlib import Path
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from airflow.configuration import conf
@@ -143,6 +145,126 @@ def _parse_timestamp_ns(line: str) -> Optional[int]:
     return int(dt.timestamp()) * 10**9 + dt.microsecond * 1000
 
 
+def to_entries(
+    lines: List[str], last_ts: Optional[int] = None
+) -> Tuple[List[LogEntry], Optional[int]]:
+    """Timestamp lines; ones without their own timestamp inherit the previous line's.
+
+    Returns the entries and the last timestamp, so a caller can continue across chunks.
+    """
+    entries: List[LogEntry] = []
+    for line in lines:
+        if not line:
+            continue
+        ts = _parse_timestamp_ns(line) or last_ts or time.time_ns()
+        entries.append((ts, line))
+        last_ts = ts
+    return entries, last_ts
+
+
+# Keep each push well under Loki's default 4 MiB request limit.
+MAX_BATCH_ENTRIES = 1000
+MAX_BATCH_BYTES = 1024 * 1024
+
+
+def iter_batches(entries: List[LogEntry]):
+    batch: List[LogEntry] = []
+    size = 0
+    for entry in entries:
+        line_size = len(entry[1].encode("utf-8", errors="replace"))
+        if batch and (len(batch) >= MAX_BATCH_ENTRIES or size + line_size > MAX_BATCH_BYTES):
+            yield batch
+            batch, size = [], 0
+        batch.append(entry)
+        size += line_size
+    if batch:
+        yield batch
+
+
+_PATH_SEGMENT = re.compile(r"^(dag_id|run_id|task_id|map_index)=(.+)$")
+_ATTEMPT_FILE = re.compile(r"^attempt=(\d+)\.log$")
+
+
+def parse_log_path(relative_path: str | os.PathLike):
+    """Identify the task try from a log path rendered by Airflow's default log_filename_template.
+
+    ``dag_id=<d>/run_id=<r>/task_id=<t>/[map_index=<m>/]attempt=<n>.log``. Returns an object with
+    the task-instance fields used for labels, or None if the path doesn't follow that layout.
+    """
+    parts = Path(relative_path).parts
+    if not parts or not (attempt := _ATTEMPT_FILE.match(parts[-1])):
+        return None
+    fields = {}
+    for part in parts[:-1]:
+        if match := _PATH_SEGMENT.match(part):
+            fields[match.group(1)] = match.group(2)
+    if not {"dag_id", "run_id", "task_id"} <= fields.keys():
+        return None
+    return SimpleNamespace(
+        dag_id=fields["dag_id"],
+        task_id=fields["task_id"],
+        run_id=fields["run_id"],
+        map_index=int(fields.get("map_index", -1)),
+        try_number=int(attempt.group(1)),
+    )
+
+
+class _LogStreamer:
+    """Ships complete lines appended to one task log file, from a background thread.
+
+    Tracks the byte offset of what Loki has accepted, so the final flush in ``upload()`` sends
+    only the rest, and lines from a failed push are retried rather than lost or duplicated.
+    """
+
+    def __init__(self, io: "LokiRemoteLogIO", path: Path, ti, interval: float):
+        self.io = io
+        self.path = path
+        self.ti = ti
+        self.interval = interval
+        # Anything already in the file (e.g. the segment before a deferral) was uploaded already.
+        self.offset = path.stat().st_size if path.exists() else 0
+        self.last_ts: Optional[int] = None
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._thread = threading.Thread(
+            target=self._run, name=f"loki-stream-{path.name}", daemon=True
+        )
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread.is_alive():
+            self._thread.join(timeout=self.interval + 10)
+
+    def _run(self) -> None:
+        while not self._stop.wait(self.interval):
+            try:
+                self.flush()
+            except Exception:
+                # Offset is unchanged; these lines are retried on the next tick or in upload().
+                pass
+
+    def flush(self, ti=None, final: bool = False) -> None:
+        """Push new lines. Without ``final``, a trailing partial line waits for its newline."""
+        with self._lock:
+            if not self.path.exists():
+                return
+            with open(self.path, "rb") as f:
+                f.seek(self.offset)
+                data = f.read()
+            if not final:
+                data = data[: data.rfind(b"\n") + 1]
+            if not data:
+                return
+            lines = data.decode("utf-8", errors="replace").splitlines()
+            entries, last_ts = to_entries(lines, self.last_ts)
+            self.io.push_entries(entries, ti or self.ti)
+            self.offset += len(data)
+            self.last_ts = last_ts
+
+
 class LokiRemoteLogIO(LoggingMixin):
     """Remote log IO for Airflow 3 (``REMOTE_TASK_LOG``): uploads and reads task logs in Loki.
 
@@ -150,6 +272,10 @@ class LokiRemoteLogIO(LoggingMixin):
     :param delete_local_copy: Delete the local log file after a successful upload.
     :param enable_gzip: Gzip the push request body.
     :param conn_id: Loki connection id; defaults to ``[logging] remote_log_conn_id``.
+    :param stream_logs: Ship log lines to Loki while the task runs, not only when it finishes.
+        Needs log paths in Airflow's default ``log_filename_template`` layout; other logs fall
+        back to the upload at task end.
+    :param stream_interval: Seconds between streamed pushes.
     """
 
     def __init__(
@@ -158,12 +284,21 @@ class LokiRemoteLogIO(LoggingMixin):
         delete_local_copy: bool = False,
         enable_gzip: bool = True,
         conn_id: Optional[str] = None,
+        stream_logs: bool = False,
+        stream_interval: float = 2.0,
     ):
         super().__init__()
         self.base_log_folder = Path(base_log_folder)
         self.delete_local_copy = delete_local_copy
         self.enable_gzip = enable_gzip
         self.conn_id = conn_id
+        self.stream_logs = stream_logs
+        self.stream_interval = stream_interval
+        self._streamers: Dict[str, _LogStreamer] = {}
+        # File names already looked at by the processor; None means "not streamable".
+        self._seen_files: Dict[str, Optional[_LogStreamer]] = {}
+        self._streamers_lock = threading.Lock()
+        self._push_lock = threading.Lock()
 
     @cached_property
     def hook(self) -> LokiHook:
@@ -171,33 +306,75 @@ class LokiRemoteLogIO(LoggingMixin):
 
     @property
     def processors(self) -> tuple:
-        # Logs are uploaded in one batch after the task finishes, not streamed per record.
-        return ()
+        if not self.stream_logs:
+            return ()
+        # Airflow reads this while the supervisor has the remote-logging connection in an env
+        # var; capture it now, since streamer threads run after the env var is gone.
+        try:
+            self.hook.cache_connection()
+        except Exception:
+            self.log.warning("Loki: can't fetch the connection; streaming disabled", exc_info=True)
+            return ()
+        return (self._stream_processor,)
+
+    def _stream_processor(self, logger, method_name, event):
+        """structlog processor: start streaming a task log file on its first record."""
+        try:
+            name = getattr(getattr(logger, "_file", None), "name", None)
+            if isinstance(name, str) and name not in self._seen_files:
+                self._start_streamer(name)
+        except Exception:
+            # Never break task logging because of streaming.
+            pass
+        return event
+
+    def _start_streamer(self, file_name: str) -> None:
+        with self._streamers_lock:
+            if file_name in self._seen_files:
+                return
+            streamer = None
+            path = Path(file_name).resolve()
+            try:
+                relative = path.relative_to(self.base_log_folder.resolve())
+            except ValueError:
+                relative = None
+            ti = parse_log_path(relative) if relative is not None else None
+            if ti is not None:
+                streamer = _LogStreamer(self, path, ti, self.stream_interval)
+                self._streamers[str(path)] = streamer
+                streamer.start()
+            self._seen_files[file_name] = streamer
+
+    def push_entries(self, entries: List[LogEntry], ti) -> None:
+        labels, metadata = get_labels(ti), get_structured_metadata(ti)
+        with self._push_lock:  # HttpHook isn't thread-safe (it mutates self.method)
+            for batch in iter_batches(entries):
+                payload = build_payload(batch, labels, metadata)
+                body, headers = encode_payload(payload, self.enable_gzip)
+                self.hook.push_log(payload=body, headers=headers)
 
     def upload(self, path: str | os.PathLike, ti=None) -> None:
-        if ti is None:
-            # Not a task log (e.g. a callback); there are no task labels to file it under.
-            return
         local_path = Path(path)
         if not local_path.is_absolute():
             local_path = self.base_log_folder / local_path
-        if not local_path.is_file():
-            return
 
-        entries: List[LogEntry] = []
-        last_ts: Optional[int] = None
-        for line in local_path.read_text(errors="replace").splitlines():
-            if not line:
-                continue
-            # Lines without their own timestamp (e.g. non-JSON output) inherit the previous one.
-            ts = _parse_timestamp_ns(line) or last_ts or time.time_ns()
-            entries.append((ts, line))
-            last_ts = ts
-
-        if entries:
-            payload = build_payload(entries, get_labels(ti), get_structured_metadata(ti))
-            body, headers = encode_payload(payload, self.enable_gzip)
-            self.hook.push_log(payload=body, headers=headers)
+        with self._streamers_lock:
+            streamer = self._streamers.pop(str(local_path.resolve()), None)
+            if streamer is not None:
+                self._seen_files = {k: v for k, v in self._seen_files.items() if v is not streamer}
+        if streamer is not None:
+            # Already streamed up to streamer.offset; send the rest (raises if Loki rejects it,
+            # which leaves the local file in place).
+            streamer.stop()
+            streamer.flush(ti, final=True)
+        else:
+            if ti is None:
+                # Not a task log (e.g. a callback); there are no task labels to file it under.
+                return
+            if not local_path.is_file():
+                return
+            entries, _ = to_entries(local_path.read_text(errors="replace").splitlines())
+            self.push_entries(entries, ti)
 
         if self.delete_local_copy:
             local_path.unlink(missing_ok=True)
